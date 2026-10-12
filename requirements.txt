@@ -1,0 +1,7 @@
+# Python >= 3.10
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+pydantic>=2.10.0
+mcp>=2.3.0,<3
+httpx>=0.28.0
+tzdata>=2024.1
