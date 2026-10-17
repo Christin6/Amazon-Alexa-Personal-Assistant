@@ -148,16 +148,10 @@ async def map_items(items: list[BriefItem], locale: str) -> list[MappedItem | No
 def _from_deterministic(item: BriefItem, *, reason: str) -> MappedItem:
     logger.info("Deterministic wording for %s (%s)", item.id, reason)
     summary, action, urgency = deterministic_wording(item)
-    if urgency == "high":
-        narrowed: Literal["low", "normal", "high"] = "high"
-    elif urgency == "low":
-        narrowed = "low"
-    else:
-        narrowed = "normal"
     wording = ItemWording(
         item_id=item.id,
         one_line_summary=summary,
-        urgency=narrowed,
+        urgency=urgency,
         action_prompt=action,
     )
     return MappedItem(wording=wording, source="deterministic")

@@ -322,7 +322,7 @@ def _spoken_items(
     spoken: list[SpokenItem] = []
     for item, mapped_item in zip(page.active_items, mapped):
         if item.id in injected or mapped_item is None:
-            summary, action, urgency = _backup_fields(item)
+            summary, action, urgency = deterministic_wording(item)
             source: Literal["llm", "deterministic", "coverage_backup"] = "coverage_backup"
         else:
             summary = mapped_item.wording.one_line_summary
@@ -342,19 +342,6 @@ def _spoken_items(
             )
         )
     return spoken
-
-
-def _backup_fields(item: BriefItem) -> tuple[str, str, Literal["low", "normal", "high"]]:
-    """Speech fields for a coverage backup, taken from this item's own fields."""
-
-    summary, action, urgency = deterministic_wording(item)
-    if urgency == "high":
-        narrowed: Literal["low", "normal", "high"] = "high"
-    elif urgency == "low":
-        narrowed = "low"
-    else:
-        narrowed = "normal"
-    return summary, action, narrowed
 
 
 def _compose_spoken(page: PageSlice, items: list[SpokenItem]) -> str:

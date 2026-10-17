@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime
 from enum import Enum
-from typing import Sequence
+from typing import Literal, Sequence
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -225,7 +225,7 @@ def validate_timeline(timeline: DayTimeline) -> None:
                 raise TimelineIntegrityError(f"{kind.value} ids are not in timestamp order")
 
 
-def deterministic_wording(item: BriefItem) -> tuple[str, str, str]:
+def deterministic_wording(item: BriefItem) -> tuple[str, str, Literal["low", "normal", "high"]]:
     """Phrase one item from its own fields.
 
     Returns ``(summary, action_prompt, urgency)``. Used when a live model call
@@ -252,7 +252,9 @@ def deterministic_wording(item: BriefItem) -> tuple[str, str, str]:
 
     device = item.device or "a Ring device"
     summary = f"At {when}, {device} reported {item.title}."
-    urgency = "high" if item.alert_type in {"person", "doorbell"} else "normal"
+    urgency: Literal["low", "normal", "high"] = (
+        "high" if item.alert_type in {"person", "doorbell"} else "normal"
+    )
     return summary, f"Say show alert {ordinal} for the clip.", urgency
 
 
