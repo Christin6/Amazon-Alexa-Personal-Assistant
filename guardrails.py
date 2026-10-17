@@ -35,12 +35,7 @@ class CoverageResult:
     """A buffer that has passed the second coverage scan."""
 
     rendered_text: str
-    covered_ids: list[str]
     injected_ids: list[str]
-
-    @property
-    def complete(self) -> bool:
-        return True
 
 
 def line_prefix_ids(rendered: str) -> list[str]:
@@ -103,6 +98,5 @@ def ensure_coverage(rendered: str, active_items: list[BriefItem]) -> CoverageRes
 
     return CoverageResult(
         rendered_text=guarded,
-        covered_ids=[item.id for item in active_items],
         injected_ids=injected,
     )

@@ -63,7 +63,7 @@ from engine import (
     describe_constraints,
     deterministic_wording,
 )
-from guardrails import backup_line, ensure_coverage
+from guardrails import ensure_coverage
 from mapper import MappedItem, map_items
 from session import (
     DEFAULT_BATCH_SIZE,
@@ -345,7 +345,7 @@ def _spoken_items(
 
 
 def _backup_fields(item: BriefItem) -> tuple[str, str, Literal["low", "normal", "high"]]:
-    """Speech fields for a coverage backup. The line prefix is checked, then discarded."""
+    """Speech fields for a coverage backup, taken from this item's own fields."""
 
     summary, action, urgency = deterministic_wording(item)
     if urgency == "high":
@@ -354,9 +354,6 @@ def _backup_fields(item: BriefItem) -> tuple[str, str, Literal["low", "normal", 
         narrowed = "low"
     else:
         narrowed = "normal"
-    line = backup_line(item)
-    if not line.startswith(f"[{item.id}] "):
-        raise RuntimeError(f"backup line for {item.id} lost its id token")
     return summary, action, narrowed
 
 

@@ -67,12 +67,6 @@ class ActionResult(BaseModel):
     payload: dict[str, Any] = {}
 
 
-def allowed_actions(item: BriefItem) -> tuple[ActionKind, ...]:
-    """The actions this item's kind supports, in the order the model should try."""
-
-    return _ALLOWED[item.kind]
-
-
 def perform_action(item: BriefItem, action: ActionKind) -> ActionResult:
     """Execute one action against one resolved item.
 
