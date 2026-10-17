@@ -234,6 +234,7 @@ def deterministic_wording(item: BriefItem) -> tuple[str, str, str]:
     """
 
     when = format_clock(item.timestamp)
+    ordinal = item_ordinal(item)
     if item.kind is SourceKind.CALENDAR:
         end = format_clock(item.end_timestamp) if item.end_timestamp else None
         if end and item.location:
@@ -242,17 +243,17 @@ def deterministic_wording(item: BriefItem) -> tuple[str, str, str]:
             summary = f"At {when}, {item.title} runs until {end}."
         else:
             summary = f"At {when}, {item.title}."
-        return summary, "Say open it if you want the details.", "normal"
+        return summary, f"Say open event {ordinal} for the details.", "normal"
 
     if item.kind is SourceKind.EMAIL:
         sender = item.sender or "an unknown sender"
         summary = f"Priority email from {sender}: {item.title}."
-        return summary, "Say read it if you want the body.", "high"
+        return summary, f"Say read email {ordinal}, or say reply to email {ordinal}.", "high"
 
     device = item.device or "a Ring device"
     summary = f"At {when}, {device} reported {item.title}."
     urgency = "high" if item.alert_type in {"person", "doorbell"} else "normal"
-    return summary, "Say show the clip if you want the video.", urgency
+    return summary, f"Say show alert {ordinal} for the clip.", urgency
 
 
 def describe_constraints(constraints: DayConstraints, items: Sequence[BriefItem]) -> list[str]:
@@ -289,6 +290,30 @@ def format_clock(moment: datetime) -> str:
     hour = local.hour % 12 or 12
     suffix = "AM" if local.hour < 12 else "PM"
     return f"{hour}:{local.minute:02d} {suffix}"
+
+
+def item_ordinal(item: BriefItem) -> int:
+    """The 1-based position of an item within its kind, read off its immutable id.
+
+    ``validate_timeline`` guarantees ids are ``kind_NN`` in timestamp order, so
+    the numeric suffix is the same ordinal a listener means by "email 2".
+    """
+
+    return int(item.id.rsplit("_", 1)[1])
+
+
+def find_by_ordinal(items: Sequence[BriefItem], kind: SourceKind, ordinal: int) -> BriefItem | None:
+    """The ``ordinal``-th item of ``kind`` in timeline order, or ``None`` if out of range.
+
+    This is the code-owned half of "which item did the listener mean". A model
+    never picks the item; it hands back a kind and an ordinal and this resolves
+    them against the live timeline.
+    """
+
+    group = [item for item in items if item.kind is kind]
+    if ordinal < 1 or ordinal > len(group):
+        return None
+    return group[ordinal - 1]
 
 
 def conflict_ids(constraints: DayConstraints) -> set[str]:

@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from engine import BriefItem, DayConstraints, DayTimeline
+from engine import BriefItem, DayConstraints, DayTimeline, SourceKind, find_by_ordinal
 
 DEFAULT_TTL_SECONDS = 20 * 60
 DEFAULT_BATCH_SIZE = 3
@@ -46,6 +46,14 @@ class SessionExpiredError(BriefSessionError):
         super().__init__(
             "session_expired",
             f"That brief expired after {ttl_phrase}. Ask me for today's brief again.",
+        )
+
+
+class ItemNotFoundError(BriefSessionError):
+    def __init__(self, reference: str) -> None:
+        super().__init__(
+            "item_not_found",
+            f"I don't have {reference} in this brief. Ask me to read the brief again.",
         )
 
 
@@ -136,6 +144,40 @@ class SessionManager:
             self._purge_locked(now_mono)
             record = self._live_locked(session_id, now_mono)
             return self._slice_locked(record, now_mono)
+
+    def lookup(self, session_id: str, item_id: str) -> BriefItem:
+        """Return one item by its immutable id. Does not move the cursor.
+
+        Raises ``SessionNotFoundError`` / ``SessionExpiredError`` for a dead
+        session and ``ItemNotFoundError`` when the id is not in this brief.
+        """
+
+        now_mono = time.monotonic()
+        with self._lock:
+            self._raise_if_expired_locked(session_id, now_mono)
+            self._purge_locked(now_mono)
+            record = self._live_locked(session_id, now_mono)
+            for item in record.items:
+                if item.id == item_id:
+                    return item
+        raise ItemNotFoundError(item_id)
+
+    def lookup_ordinal(self, session_id: str, kind: SourceKind, ordinal: int) -> BriefItem:
+        """Return one item by kind and 1-based ordinal. Does not move the cursor.
+
+        Ordinal resolution is delegated to ``engine.find_by_ordinal`` so the
+        session never counts items itself.
+        """
+
+        now_mono = time.monotonic()
+        with self._lock:
+            self._raise_if_expired_locked(session_id, now_mono)
+            self._purge_locked(now_mono)
+            record = self._live_locked(session_id, now_mono)
+            item = find_by_ordinal(record.items, kind, ordinal)
+        if item is None:
+            raise ItemNotFoundError(f"{kind.value} {ordinal}")
+        return item
 
     def complete_page(self, session_id: str, cursor_after: int) -> bool:
         """Advance the cursor to ``cursor_after`` if the session is still live.

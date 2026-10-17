@@ -51,6 +51,7 @@ from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field
 
+from actions import ActionKind, ActionResult, perform_action
 from engine import (
     BriefItem,
     DayConstraints,
@@ -78,6 +79,8 @@ _HTTP_STATUS: dict[str, int] = {
     "session_not_found": 404,
     "session_expired": 410,
     "invalid_timezone": 422,
+    "item_not_found": 404,
+    "action_not_supported": 422,
 }
 
 
@@ -106,6 +109,8 @@ mcp = MCPServer(
         "Call get_day_brief to start a spoken day brief. Read spoken_text aloud. "
         "total_count, remaining_count, ordered_ids, and the item ids are authoritative. "
         "When the user says next, call next_items with the same session_id. "
+        "To act on an item, call find_item to turn a reference like 'email 2' into an "
+        "item_id, then read_item, reply_to_item, open_item, or show_item. "
         "Use only the tool result for events, emails, alerts, and counts."
     ),
     version="0.1.0",
@@ -122,6 +127,29 @@ class GetDayBriefRequest(BaseModel):
 class NextItemsRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=64)
     locale: str = Field(default="", max_length=35)
+
+
+class FindItemRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=64)
+    kind: SourceKind
+    ordinal: int = Field(ge=1)
+
+
+class ActionRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=64)
+    item_id: str = Field(min_length=1, max_length=64)
+
+
+class ResolvedItem(BaseModel):
+    """A spoken reference such as "email 2" resolved to a code-owned item id."""
+
+    ok: bool
+    error_code: str | None = None
+    item_id: str | None = None
+    kind: SourceKind | None = None
+    ordinal: int | None = None
+    one_line_summary: str = ""
+    spoken_text: str = ""
 
 
 class SpokenItem(BaseModel):
@@ -463,6 +491,49 @@ def _json(brief: VoiceBrief) -> JSONResponse:
     return JSONResponse(status_code=_status_for(brief), content=brief.model_dump(mode="json"))
 
 
+def _json_action(result: ActionResult | ResolvedItem) -> JSONResponse:
+    return JSONResponse(
+        status_code=200 if result.ok else _HTTP_STATUS.get(result.error_code or "", 400),
+        content=result.model_dump(mode="json"),
+    )
+
+
+def resolve_item(session_id: str, kind: SourceKind, ordinal: int) -> ResolvedItem:
+    """Resolve a spoken reference such as "email 2" to its code-owned item id.
+
+    The session supplies the live timeline; ``engine.find_by_ordinal`` picks the
+    item. The caller (a model) never counts or chooses membership.
+    """
+
+    try:
+        item = sessions.lookup_ordinal(session_id, kind, ordinal)
+    except BriefSessionError as exc:
+        return ResolvedItem(ok=False, error_code=exc.code, spoken_text=exc.spoken_text)
+    summary, _action, _urgency = deterministic_wording(item)
+    return ResolvedItem(
+        ok=True,
+        item_id=item.id,
+        kind=item.kind,
+        ordinal=ordinal,
+        one_line_summary=summary,
+        spoken_text=f"{kind.value.capitalize()} {ordinal} is {summary}",
+    )
+
+
+def act_on_item(session_id: str, item_id: str, action: ActionKind) -> ActionResult:
+    """Execute one triage action against a resolved item in a live brief.
+
+    Session lookup and action semantics are code-owned; ``perform_action`` is a
+    pure function of the item and the action.
+    """
+
+    try:
+        item = sessions.lookup(session_id, item_id)
+    except BriefSessionError as exc:
+        return ActionResult(ok=False, error_code=exc.code, spoken_text=exc.spoken_text)
+    return perform_action(item, action)
+
+
 @mcp.tool(
     description=(
         "Start today's brief. Code loads, sorts, numbers, and counts every calendar "
@@ -487,6 +558,57 @@ async def get_day_brief(
 )
 async def next_items(session_id: str, locale: str = "") -> VoiceBrief:
     return await advance_brief(session_id=session_id, locale=locale)
+
+
+@mcp.tool(
+    description=(
+        "Resolve a spoken reference like 'email 2' to its item id in a live brief. "
+        "kind is calendar, email, or ring; ordinal is 1-based. Returns item_id and a "
+        "spoken summary. Use the returned item_id with the action tools; never guess an id."
+    )
+)
+async def find_item(session_id: str, kind: SourceKind, ordinal: int) -> ResolvedItem:
+    return resolve_item(session_id=session_id, kind=kind, ordinal=ordinal)
+
+
+@mcp.tool(
+    description=(
+        "Read a priority email aloud. Pass the session_id and the exact item_id from "
+        "get_day_brief, next_items, or find_item. Returns spoken_text and the email body."
+    )
+)
+async def read_item(session_id: str, item_id: str) -> ActionResult:
+    return act_on_item(session_id=session_id, item_id=item_id, action=ActionKind.READ)
+
+
+@mcp.tool(
+    description=(
+        "Prepare a reply to a priority email. Pass the session_id and item_id. Returns a "
+        "draft; nothing is sent. Read spoken_text to confirm."
+    )
+)
+async def reply_to_item(session_id: str, item_id: str) -> ActionResult:
+    return act_on_item(session_id=session_id, item_id=item_id, action=ActionKind.REPLY)
+
+
+@mcp.tool(
+    description=(
+        "Open a calendar event's details. Pass the session_id and item_id. Returns "
+        "spoken_text with the time and location."
+    )
+)
+async def open_item(session_id: str, item_id: str) -> ActionResult:
+    return act_on_item(session_id=session_id, item_id=item_id, action=ActionKind.OPEN)
+
+
+@mcp.tool(
+    description=(
+        "Show a Ring alert. Pass the session_id and item_id. Returns spoken_text with the "
+        "device and what it detected."
+    )
+)
+async def show_item(session_id: str, item_id: str) -> ActionResult:
+    return act_on_item(session_id=session_id, item_id=item_id, action=ActionKind.SHOW)
 
 
 def _transport_security() -> TransportSecuritySettings:
@@ -589,8 +711,41 @@ async def next_items_route(body: NextItemsRequest) -> JSONResponse:
     return _json(brief)
 
 
-# Mounted last so ``/get_day_brief``, ``/next_items``, and ``/health`` win first.
-# A request to ``/mcp`` is forwarded to the Streamable HTTP app.
+@app.post("/find_item")
+async def find_item_route(body: FindItemRequest) -> JSONResponse:
+    return _json_action(resolve_item(session_id=body.session_id, kind=body.kind, ordinal=body.ordinal))
+
+
+@app.post("/read_item")
+async def read_item_route(body: ActionRequest) -> JSONResponse:
+    return _json_action(
+        act_on_item(session_id=body.session_id, item_id=body.item_id, action=ActionKind.READ)
+    )
+
+
+@app.post("/reply_to_item")
+async def reply_to_item_route(body: ActionRequest) -> JSONResponse:
+    return _json_action(
+        act_on_item(session_id=body.session_id, item_id=body.item_id, action=ActionKind.REPLY)
+    )
+
+
+@app.post("/open_item")
+async def open_item_route(body: ActionRequest) -> JSONResponse:
+    return _json_action(
+        act_on_item(session_id=body.session_id, item_id=body.item_id, action=ActionKind.OPEN)
+    )
+
+
+@app.post("/show_item")
+async def show_item_route(body: ActionRequest) -> JSONResponse:
+    return _json_action(
+        act_on_item(session_id=body.session_id, item_id=body.item_id, action=ActionKind.SHOW)
+    )
+
+
+# Mounted last so ``/get_day_brief``, ``/next_items``, ``/health``, and the action
+# routes win first. A request to ``/mcp`` is forwarded to the Streamable HTTP app.
 app.mount("/", mcp_app)
 
 
